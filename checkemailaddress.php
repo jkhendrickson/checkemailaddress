@@ -12,114 +12,234 @@
    // example:
    require_once 'checkemailaddress.php';
    
-   // which email address would you like to validate
-   $data["email"][] = "jeff@hendricom.com";
-   // change this to your domain e.g. mine is hendricom.com
-   $data["hellodomain"][] = "hendricom.com";
-   
-   $result = CheckEmailAddress($data);
-   printf("Result = %s, %s\n", $result["success"], $result["message"]);
+    $emailAddress = "jeff@hendricom.com";
+    $helloDomain = "hendricom.com";
+    
+    printf("Checking " . $emailAddress . ", at " . $helloDomain . PHP_EOL);
+    $result = Test($emailAddress, $helloDomain);
+    if ($result) {
+        printf($emailAddress . " valid!");
+    } else {
+        printf($emailAddress . " invalid!");
+    }
  */ 
 
-function CheckEmailAddress($data) {
-    $result = [
-        "success" => true,
-        "message" => "Success!",
-        "email" => []
-    ];
+/*
+$emailAddress = "jeff@hendricom.com";
+$helloDomain = "hendricom.com";
+*/
 
-    for ($i = 0; $i < sizeof($data["email"]); $i++) {
-        $emailaddress = $data["email"][$i];        
-        // JKH note: this is also in the other func.php
-        $domain = substr($emailaddress, strpos($emailaddress, '@') + 1);
-        // get the Name Server
-        exec("dig " . $domain . " ns +short", $dns);
-        if($dns == "") {
-            $result["success"] = false;
-            $result["message"] = "One or more email addresses you entered may be invalid.<br/>NS invalid</br>Double-check to make sure they are correct before proceeding.";
-            $result["email"][] = $emailaddress;
-            return $result;
-        }  
-        $nameserver = "";
-        foreach($dns as $key => $value) {
-            $nameserver = $value;
-        }      
-        // get the MXs for the domain using the domain's Name Server
-        exec("dig @" . $nameserver . " +short MX " . $domain, $mx);
-        if (sizeof($mx) < 1) {
-            $result["success"] = false;
-            $result["message"] = "One or more email addresses you entered may be invalid.<br/>MX invalid<br/>Double-check to make sure they are correct before proceeding.";
-            $result["email"][] = $emailaddress;              
-            return $result;        
+$emailAddress = "chris@skycoastal.com";
+$helloDomain = "claimpros.com";
+
+printf("Checking " . $emailAddress . ", at " . $helloDomain . PHP_EOL);
+$result = Test($emailAddress, $helloDomain);
+if ($result) {
+    printf($emailAddress . " valid!" . PHP_EOL);
+} else {
+    printf($emailAddress . " invalid!" . PHP_EOL);
+}
+   
+function Test($emailAddress, $helloDomain) {
+
+    $result = CheckEmailAddress($emailAddress, $helloDomain);
+    return $result;
+  
+}
+
+// JKH added
+function CheckEmailAddress($emailAddress, $helloDomain) {
+
+    $bRetcode = false;
+    
+    printf("Validating " . $emailAddress . PHP_EOL);
+    
+    // JKH note: this is also in the other func.php
+    $domain = substr($emailAddress, strpos($emailAddress, '@') + 1);
+    // JKH this may be claims.allstate.com
+    //
+    $domainArray = explode('.', $domain);
+    if (sizeof($domainArray) < 2) {
+        printf("Invalid domain " . $domain . "!");
+        return $bRetcode;
+    }
+    // remember 0 offset...
+    $ext = $domainArray[sizeof($domainArray)-1];
+    $tld = $domainArray[sizeof($domainArray)-2];
+    $domain = $tld . "." . $ext;
+    printf("Email domain " . $domain);
+
+    // get the Name Server
+    printf("dig " . $domain . " ns +short" . PHP_EOL);
+    exec("dig " . $domain . " ns +short", $dns);
+    if($dns == "") {
+        printf("No DNS server returned!\n");;
+        return $bRetcode;
+    }
+    $nameserver = "";
+    $backupnameserver = "";
+    foreach($dns as $key => $value) {
+        $nameserver = $value;
+        if (strlen($backupnameserver) == 0) {
+            $backupnameserver = $value;
         }
-        $top_choice = 10; // default to 10, get top choice
-        $top_mx = ""; // empty mx
-        foreach($mx as $key => $value) {          
-            if (preg_match('/(\d+) (.*)\./', $value, $output_array)) {
-                if ($top_choice >= $output_array[1]) {
-                    $top_mx = $output_array[2];
-                    $top_choice = $output_array[1];
-                }                    
+    }
+
+    // get the MXs for the domain using the domain's Name Server
+    printf("dig @" . $nameserver . " +short MX " . $domain . PHP_EOL);
+    exec("dig @" . $nameserver . " +short MX " . $domain, $mx);
+    if (sizeof($mx) < 1) {
+        // make a second attempt with the backupnameserver if present
+        if (strlen($backupnameserver) > 0) {
+            printf("dig @" . $backupnameserver . " +short MX " . $domain . PHP_EOL);
+            exec("dig @" . $backupnameserver . " +short MX " . $domain, $mx);
+        }
+        // if we still haven't found the mx, bail out
+        if (sizeof($mx) < 1) {
+            printf("Error, " . $domain . " invalid!" . PHP_EOL);
+            return $bRetcode;
+        }
+    }
+
+    // we need a list of the mail exchanges to loop through
+    // in case the first one doesn't work...
+    $MXs = array();
+    foreach($mx as $key => $value) {
+        // note: this may be ...
+        //  g.root-servers.net.
+        //  f.root-servers.net.
+        //  etc...
+        // vice ...
+        // 20 mx1.zoho.com.
+        // 10 mx2.zoho.com.
+        // note: MXs are rotated on their own, so no need to check top
+        //  just use first value...
+        if (preg_match('/(\d+) (.*)\./', $value, $output_array)) {
+            $MXs[] = $output_array[2];
+        } elseif (preg_match('/(.*)\./', $value, $output_array) ) {
+            $MXs[] = $output_array[1];
+        }
+    }
+
+    // JKH note: these can be returned as e.root-servers.net:25
+    foreach ($MXs as $mx) {
+        $mx_split = explode(":", $mx);
+        $top_mx = $mx_split[0];
+        $port = 25;
+        if (sizeof($mx_split) == 2) {
+            $port = $mx_split[1];
+        }
+        printf("Connecting " . $top_mx . PHP_EOL);
+        // connect to MX for domain with a 15 second timeout
+        $fp = @fsockopen($top_mx, $port, $errno, $errstr, 15);
+        if ($fp) {
+            break;
+        }
+    }
+
+    if (!$fp) {
+        printf($top_mx . " connect fails! " . "errstr = " . $errstr . PHP_EOL);
+        return $bRetcode;
+    } else {
+       printf($top_mx . " connects.");
+        $response = "";
+        $i = 0;
+        while (strlen($response) == 0) {
+            printf("Read " . ++$i . PHP_EOL);
+            // give it more than one go...
+            // double checking fp in case it was re-opened as described below
+            if ($fp) {
+                $response = fgets($fp, 1024);
             }
-        } 
+            if (strlen($response) == 0) {
+                if ($i > 3) {
+                    printf("Aborting mx read" . PHP_EOL);
+                    // three times and you're out
+                    break;
+                }
+                // we're going to try this again
+                fclose($fp);
+                // give it a rest, and try again with a longer wait.
+                usleep(100 * 100);
+                $fp = @fsockopen($top_mx, 25, $errno, $errstr, 30);
+            } else {
+                // we've received our response
+                break;
+            }
+        }
 
-        // now, you have domain name, the nameserver, and the top mx for this domain.
-        // printf("Domain %s\n", $domain);
-        // printf("Name server %s\n", $nameserver); 
-        // printf("Top MX = %s\n", $top_mx);       
-
-        // connect to MX for domain
-        $fp = @fsockopen($top_mx, 25, $errno, $errstr, 20);
-        if (!$fp) {
-            $result["success"] = false;
-            $result["message"] = "One or more email addresses you entered may be invalid.<br/>MX connect<br/>Double-check to make sure they are correct before proceeding.";
-            $result["email"][] = $emailaddress;              
-            return $result;               
-        } else {
-            $response = fgets($fp, 1024);
-            // printf("Response %s\n", $response);             
+        printf("Response = " . $response);
+        // sometimes the server is a relay, and you'll get two 220s e.g.
+        // 220-mx1-us1.ppe-hosted.com - Please wait...
+        // 220 mx1-us1.ppe-hosted.com - Welcome to PPE Hosted ESMTP Server
+        $proceed = true;
+        $tries = 3;
+        while ($proceed && $tries-- > 0) {
             if (substr($response, 0, 3) != "220") {
                 $error_number = substr($response, 0, 3);
                 if ($error_number == 554) {
                     // how to report warning?
-                    $myDebug = __FILE__ . " " . __LINE__;
-                    $result["success"] = true;
-                    $result["message"] = $myDebug . " Warning, connected to MX, but connection forcibly closed!";
-                    // this broken connect may be because of DNS RBL reports by IP, e.g.
-                    // Response 554 5.7.1 ACL dns_rbl; Client host [45.58.42.7] blocked using Spamhaus PBL 
-                    // if you've gotten this far, the domain is right, the mx is right, and I would give 
+                    // this broken connect may be because of DNS RBL reports by IP
+                    // Response 554 5.7.1 ACL dns_rbl; Client host [45.58.42.7] blocked using Spamhaus PBL
+                    // if you've gotten this far, the domain is right, the mx is right, and I would give
                     // the email address a pass, a truly unroutable email would have failed by now...
-                    // you can turn this into a fail here if you like...
-                    // return positive result
-                    return $result;                   
-                }            
-                $result["success"] = false;
-                $result["message"] = "One or more email addresses you entered may be invalid.<br/>No 220 on Connect<br/>Double-check to make sure they are correct before proceeding.";
-                $result["email"][] = $emailaddress;              
-                return $result;             
-            }         
-            $out = "HELO " . $data["hellodomain"][$i] . "\r\n";
-            fwrite($fp, $out); 
-            $response = fgets($fp, 1024);
-            if (substr($response, 0, 3) != "250") {
-                $result["success"] = false;
-                $result["message"] = "One or more email addresses you entered may be invalid.<br/>No 250 on HELO<br/>Double-check to make sure they are correct before proceeding.";
-                $result["email"][] = $emailaddress;              
-                return $result;                
-            }                             
-            $out = "MAIL FROM:<" . $emailaddress . ">\r\n";
-            fwrite($fp, $out);          
-            $response = fgets($fp, 1024);
-            if (substr($response, 0, 3) != "250") {
-                $result["success"] = false;
-                $result["message"] = "One or more email addresses you entered may be invalid.<br/>No 250 on FROM<br/>Double-check to make sure they are correct before proceeding.";
-                $result["email"][] = $emailaddress;              
-                return $result;              
-            }                               
+                    printf("Error, " . $top_mx . " forcibly closes, fail!" . PHP_EOL);
+                    return $bRetcode;
+                }
+                printf("Error, " . $top_mx . " fail!" . PHP_EOL);
+                return $bRetcode;
+            }
+            $position = strripos($response, "wait");
+            if ($position === false) {
+                // we can break, else go for the next 220
+                printf("SMTP Ok to proceed" . PHP_EOL);
+                $proceed = false;
+            } else {
+                // there was a "wait" so lets get the next string
+                $response = fgets($fp, 1024);
+            }
+        }
+        $out = "HELO " . $helloDomain . "\r\n";
+        printf("Sending HELO " . $out);
+        fwrite($fp, $out);
+        $response = fgets($fp, 1024);
+        if (substr($response, 0, 3) != "250") {
+            // some times a server will be acting as relay, e.g. mx1-us1.ppe-hosted.com
+            // this will connect more slowly so we increased the timeout
+            if (substr($response, 0, 3) == "521")  {
+                printf("Warning: Server reports it is relay, continuing check");
+            } else {
+                printf("Error, " . $top_mx . " HELO fails!" . PHP_EOL);
+                return $bRetcode;
+            }
+        }
+        $fromAddress = "jeff@hendricom.com";
+        $emailAddress = trim($emailAddress);
+        $out = "MAIL FROM:<" . $fromAddress . ">\r\n";
+        printf("Sending from " . $out);
+        fwrite($fp, $out);
+        $response = fgets($fp, 1024);
+        if (substr($response, 0, 3) != "250") {
+            printf("Error, setting from fails for " . $fromAddress);
+            return $bRetcode;
+        }
+        // this is really where the rubber hits the road...
+        // you're connected to the SMTP server and asking it to delivery a message to the MBOX
+        // if you get a 250 on this, this email is valid
+        $out = "RCPT TO:<" . $emailAddress . ">\r\n";
+        printf("Sending to " . $out);
+        fwrite($fp, $out);
+        $response = fgets($fp, 1024);
+        if (substr($response, 0, 3) != "250") {
+            printf("Error, mailbox " . $emailAddress . " fails!" . PHP_EOL);
+            return $bRetcode;
         }
     }
-    fclose($fp);        
+
+    fclose($fp);
     // no errors email is valid
-    return $result;
-} 
+    $bRetcode = true;
+    printf($emailAddress . " email address validated!" . PHP_EOL);
+    return $bRetcode;
+}
 ?>        
